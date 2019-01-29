@@ -12,14 +12,12 @@
 #include <errno.h>
 #include <mpi.h>
 
-
 #define GRAVITY     1.1
 #define FRICTION    0.01
 #define MAXBODIES   10000
 #define DELTA_T     (0.025/5000)
 #define BOUNCE      -0.9
 #define SEED        27102015
-
 
 struct bodyType {
     double x1[MAXBODIES];        /* Old and new X-axis coordinates */
@@ -87,24 +85,19 @@ static void compute_force_two_particles(struct world *world, int b, double x1, d
 }
 
 static void
-compute_forces(struct world *world, int *particle_distribution, int total, double *tmp_comm_array, 
+compute_forces(struct world *world, int *particle_distribution, int total, int max_total_num, double *tmp_comm_array, 
                 int tmp_array_size, int process_id, int num_processes)
 {   
     MPI_Status status;
     int i,j;
-    int max_num = (int) (world->bodyCt/num_processes);
-    if (world->bodyCt % num_processes != 0) {
-        max_num += 1;
-    }
-
+    
     //Pointers to point to the particle indexes and forces in the tmp_comm_array
     double *index, *fx, *fy, *x, *y;
-    int tmp_arr_size = 1 + max_num * 5;
     index = &tmp_comm_array[1];
-    fx = &tmp_comm_array[1 + max_num];
-    fy = &tmp_comm_array[1 + 2*max_num];
-    x = &tmp_comm_array[1 + 3*max_num];
-    y = &tmp_comm_array[1 + 4*max_num];
+    fx = &tmp_comm_array[1 + max_total_num];
+    fy = &tmp_comm_array[1 + 2*max_total_num];
+    x = &tmp_comm_array[1 + 3*max_total_num];
+    y = &tmp_comm_array[1 + 4*max_total_num];
     
     //Fill the tmp_comm_array with all the values from this process.
     memset(tmp_comm_array, 0, sizeof(double)*tmp_array_size);
@@ -118,17 +111,18 @@ compute_forces(struct world *world, int *particle_distribution, int total, doubl
 
     int tmp_tot = 0;
 
-    double *recv_buffer = malloc(sizeof(double)*tmp_arr_size);
+    //Recv particles from left, send to the right 
     int neighbour_recv = (process_id - 1 + num_processes) % num_processes;
     int neighbour_send = (process_id + 1) % num_processes;
     int round = 0;
     // ----------------------------------------
-    for (round = 0; round < num_processes ; round ++) {
+    // for (round = 0; round < num_processes ; round ++) {
+    do {
         tmp_tot = (int)tmp_comm_array[0];
         for (i = 0; i < total; i++) {
             int own_particle = particle_distribution[i];
-            double x_loc = X(world, own_particle);
-            double y_loc = Y(world, own_particle);
+            double x1 = X(world, own_particle);
+            double y1 = Y(world, own_particle);
             for (j = 0; j < tmp_tot; j++) {
                 double xf, yf;
                 int idx_int = (int) index[j];
@@ -136,7 +130,7 @@ compute_forces(struct world *world, int *particle_distribution, int total, doubl
                     double x2 = x[j];
                     double y2 = y[j];
                     
-                    compute_force_two_particles(world, own_particle, x_loc, y_loc,
+                    compute_force_two_particles(world, own_particle, x1, y1,
                                                 idx_int, x2, y2, &xf, &yf);
                     XF(world, own_particle) += xf;
                     YF(world, own_particle) += yf;
@@ -148,19 +142,21 @@ compute_forces(struct world *world, int *particle_distribution, int total, doubl
         }
 
         //Send receive tmp_comm_array from neighbours
-        MPI_Sendrecv_replace(tmp_comm_array, tmp_arr_size, MPI_DOUBLE, neighbour_send, 0, 
+        MPI_Sendrecv_replace(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0, 
                             neighbour_recv, 0, MPI_COMM_WORLD, &status);
-    }
-
+        round++;
+    } while (round < num_processes);
+    // MPI_Sendrecv_replace(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0, 
+    //                         neighbour_recv, 0, MPI_COMM_WORLD, &status);
+        
 
     // Add all the forces from the tmp_comm_array to world forces of locally owned particles
     int par = 0;
     for (i=0; i<tmp_tot; i++) {
-        par = index[i];
+        par = (int) index[i];
         XF(world, par) += fx[i];
         YF(world, par) += fy[i];
     }
-    free(recv_buffer);
 
 }
 
@@ -415,9 +411,10 @@ print(struct world *world)
 }
 
 void
-do_compute(unsigned int secsup, struct filemap image_map, int steps, struct world *world, int process_id, int num_processes, int *count_per_process, int *displs_array) {
+do_compute(unsigned int secsup, struct filemap image_map, int steps, struct world *world, int process_id, int num_processes, int *count_per_process) {
     MPI_Status status;
     unsigned int lastup = 0;
+    
     int i, j = 0;
     
     /* 
@@ -434,27 +431,34 @@ do_compute(unsigned int secsup, struct filemap image_map, int steps, struct worl
     }
 
     // Get the max number of particles on any locale. Required for index referencing later on
-    int max_num = (int) (world->bodyCt/num_processes);
+    int max_total_num = (int) (world->bodyCt/num_processes);
     if (world->bodyCt % num_processes != 0) {
-        max_num += 1;
+        max_total_num += 1;
     }
 
-    //communication array needs to store : 1. number of particles, 2. array of indexes, 3. xforce 4. yforce
-    int arr_size = 1 + max_num * 5;
+    /*
+    Communication array needs to store : 
+    1. number of particles, 
+    2. array of indexes, 
+    3. xforce 
+    4. yforce
+    5. x_loc 
+    6. y_loc
+    */ 
+    int arr_size = 1 + max_total_num * 5;
     double *tmp_comm_array = malloc (arr_size * sizeof(double));
     if (tmp_comm_array == NULL) {
         fprintf(stderr, "[%d]tmp_comm_array is NULL. Exiting \n", process_id);
     }
+
     while (steps--) {
         clear_forces(world, particle_distribution, count_per_process[process_id]);
-        compute_forces(world, particle_distribution, count_per_process[process_id], tmp_comm_array, arr_size, process_id, num_processes);
+        compute_forces(world, particle_distribution, count_per_process[process_id], max_total_num, tmp_comm_array, arr_size, process_id, num_processes);
         compute_velocities(world, particle_distribution,  count_per_process[process_id]);
         compute_positions(world, particle_distribution,  count_per_process[process_id]);
 
         /* Flip old & new coordinates */
-        world->old ^= 1;
         world->bodies.x_old = world->bodies.x_new;
-
         world->bodies.y_old = world->bodies.y_new;
 
         /*Time for a display update?*/ 
@@ -464,9 +468,13 @@ do_compute(unsigned int secsup, struct filemap image_map, int steps, struct worl
             lastup = time(0);
         }
     }
-    double *big_buff, *x_loc, *y_loc, *fx, *fy, *x_vel, *y_vel;
+    free(tmp_comm_array);
+
+    /*
+    TODO : Move this to another function outside of timing step. this is collection of data post everything */
+    double *x_loc, *y_loc, *fx, *fy, *x_vel, *y_vel;
     if (process_id != 0) {
-        big_buff = malloc(count_per_process[process_id]*6*sizeof(double));
+        double *big_buff = malloc(count_per_process[process_id]*6*sizeof(double));
         x_loc = big_buff;
         y_loc = &big_buff[count_per_process[process_id]];
         fx = &big_buff[2*count_per_process[process_id]];
@@ -484,8 +492,8 @@ do_compute(unsigned int secsup, struct filemap image_map, int steps, struct worl
             x_vel[i] = XV(world, idx);
             y_vel[i] = YV(world, idx);
         }
-
-        MPI_Send(big_buff, count_per_process[process_id], MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+        int tag = 0;
+        MPI_Send(big_buff, 6*count_per_process[process_id], MPI_DOUBLE, 0, tag, MPI_COMM_WORLD);
 
         free(big_buff);
     } else {
@@ -501,7 +509,8 @@ do_compute(unsigned int secsup, struct filemap image_map, int steps, struct worl
         double *buf;
         for (i=1; i<num_processes; i++) {
             buf = malloc(count_per_process[i]*6*sizeof(double));
-            MPI_Recv (buf, count_per_process[i]*6, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status );
+            int tag = 0;
+            MPI_Recv (buf, count_per_process[i]*6, MPI_DOUBLE, i, tag, MPI_COMM_WORLD, &status );
             x_loc = buf;
             y_loc = &buf[count_per_process[i]];
             fx = &buf[2*count_per_process[i]];
@@ -569,9 +578,8 @@ main(int argc, char **argv)
     struct filemap image_map;
     struct world *world;
     int i;
-    int loc_num = 0;
+    int bodies_per_process = 0;
     int *count_per_process;
-    int *displs_array;
 
     world = calloc(1, sizeof *world);
     if (world == NULL) {
@@ -620,23 +628,17 @@ main(int argc, char **argv)
         }
     }
 
-    loc_num = (int) (world->bodyCt/num_processes);
+    bodies_per_process = (int) (world->bodyCt/num_processes);
     count_per_process = malloc(num_processes * sizeof(int));
 
     for (i=0; i<num_processes; i++) {
         if (i < world->bodyCt%num_processes) {
-            count_per_process[i] = loc_num + 1;
+            count_per_process[i] = bodies_per_process + 1;
         } else {
-            count_per_process[i] = loc_num;
+            count_per_process[i] = bodies_per_process;
         }
     }
 
-    displs_array = malloc(num_processes * sizeof(int));
-    int tmp = 0;
-    for (i=0; i<num_processes; i++) {
-        displs_array[i] = tmp;
-        tmp += count_per_process[i];
-    }
     send_receive_initial_data(world, process_id ,num_processes);
 
     if (process_id == 0) {
@@ -647,7 +649,7 @@ main(int argc, char **argv)
     }
 
     /* Main Execution */
-    do_compute(secsup, image_map, steps, world, process_id, num_processes, count_per_process, displs_array);
+    do_compute(secsup, image_map, steps, world, process_id, num_processes, count_per_process);
     
     if (process_id == 0) {
         if (gettimeofday(&end, 0) != 0) {
@@ -658,6 +660,7 @@ main(int argc, char **argv)
                     (start.tv_sec + (start.tv_usec / 1000000.0));
 
         fprintf(stderr, "N-body took %10.3f seconds\n", rtime);
+        sleep(5);
         print(world);
 
         filemap_close(&image_map);
