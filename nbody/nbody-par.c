@@ -114,23 +114,24 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
     int neighbour_send = (process_id + 1) % num_processes;
     int round = 0;
 
+    int tmp_tot, own_particle_id, communicated_particle_id;
+    double x1, x2, y1, y2, xf, yf;
     // ----------------------------------------
     do
     {   
-        int tmp_tot = (int)tmp_comm_array[0];
+        tmp_tot = (int)tmp_comm_array[0];
         for (i = 0; i < total; i++)
         {
-            int own_particle_id = particle_distribution[i];
-            double x1 = X(world, own_particle_id);
-            double y1 = Y(world, own_particle_id);
+            own_particle_id = particle_distribution[i];
+            x1 = X(world, own_particle_id);
+            y1 = Y(world, own_particle_id);
             for (j = 0; j < tmp_tot; j++)
             {
-                double xf, yf;
-                int communicated_particle_id = (int)index[j];
+                communicated_particle_id = (int)index[j];
                 if (own_particle_id < communicated_particle_id)
                 {
-                    double x2 = x[j];
-                    double y2 = y[j];
+                    x2 = x[j];
+                    y2 = y[j];
 
                     compute_force_two_particles(world, own_particle_id, x1, y1,
                                                 communicated_particle_id, x2, y2, &xf, &yf);
@@ -695,7 +696,7 @@ int main(int argc, char **argv)
     send_receive_final_data(world, process_id, num_processes, count_per_process, particle_distribution); 
 
     if (process_id == 0) { 
-        // print(world);
+        print(world);
 
         filemap_close(&image_map);
     }
