@@ -114,6 +114,7 @@ compute_velocities(struct world *world)
 
         XV(world, b) += (xf / M(world, b)) * DELTA_T;
         YV(world, b) += (yf / M(world, b)) * DELTA_T;
+        // fprintf(stderr, "Particle : %d, xvel : %f, yvel : %f\n", b, XV(world, b), YV(world, b));
     }
 }
 
@@ -145,6 +146,7 @@ compute_positions(struct world *world)
         /* Update position */
         XN(world, b) = xn;
         YN(world, b) = yn;
+        // fprintf(stderr, "Particle : %d, x : %f, y : %f\n", b, xn, yn);
     }
 }
 
