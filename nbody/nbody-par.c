@@ -84,7 +84,8 @@ static void
 compute_forces(struct world *world, int *particle_distribution, int total, int max_total_num, double *tmp_comm_array,
                int tmp_array_size, int process_id, int num_processes)
 {
-    MPI_Status status;
+    MPI_Status status, status_arr[2];
+    MPI_Request request[2];
     int i, j;
 
     //Pointers to point to the particle indexes, forces, and x,y coordinates in the tmp_comm_array
@@ -109,6 +110,7 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
         fy[i] = 0;
     }
     
+    double *receive_buffer = malloc(tmp_array_size * sizeof(double));
     //Recv particles from left, send to the right
     int neighbour_recv = (process_id - 1 + num_processes) % num_processes;
     int neighbour_send = (process_id + 1) % num_processes;
@@ -142,9 +144,17 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
                 }
             }
         }
-        //Send receive tmp_comm_array from neighbours
-        MPI_Sendrecv_replace(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0,
-                             neighbour_recv, 0, MPI_COMM_WORLD, &status);
+        MPI_Irecv(receive_buffer, tmp_array_size, MPI_DOUBLE, neighbour_recv, 0, MPI_COMM_WORLD, &request[1]);
+        MPI_Isend(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0, MPI_COMM_WORLD, &request[0]);
+        MPI_Waitall(2, request, status_arr);
+        // //Send receive tmp_comm_array from neighbours
+        // MPI_Sendrecv_replace(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0,
+        //                      neighbour_recv, 0, MPI_COMM_WORLD, &status);
+        
+        for (i=0; i<tmp_array_size; i++) {
+            tmp_comm_array[i] = receive_buffer[i];
+        }
+        
         round++;
     } while (round < num_processes);
 
