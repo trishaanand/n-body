@@ -577,8 +577,8 @@ int main(int argc, char **argv)
     int b;
     int steps;
     double rtime;
-    struct timeval start;
-    struct timeval end;
+    double start;
+    double end;
     struct filemap image_map;
     struct world *world;
     int i;
@@ -695,23 +695,15 @@ int main(int argc, char **argv)
     }
     prepare_MPI_commands(process_id, num_processes, arr_size, tmp_comm_array, receive_buffer, request);
 
-    if (gettimeofday(&start, 0) != 0)
-    {
-        fprintf(stderr, "could not do timing\n");
-        exit(1);
-    }
+    start = MPI_Wtime();
     
     /* Main Execution */
     do_compute(secsup, image_map, steps, world, process_id, num_processes, count_per_process, particle_distribution[process_id], 
                 max_total_num, tmp_comm_array, receive_buffer, arr_size, request);
 
-    if (gettimeofday(&end, 0) != 0)
-    {
-        fprintf(stderr, "could not do timing\n");
-        exit(1);
-    }
-    rtime = (end.tv_sec + (end.tv_usec / 1000000.0)) -
-            (start.tv_sec + (start.tv_usec / 1000000.0));
+    end = MPI_Wtime();
+
+    rtime = end - start;
     
     double global_rtime;
     MPI_Reduce(&rtime, &global_rtime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);

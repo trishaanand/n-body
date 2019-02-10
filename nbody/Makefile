@@ -8,10 +8,7 @@ nbody-par: nbody-par.c
 nbody-seq: nbody-seq.c
 	gcc $(CFLAGS) -o nbody-seq nbody-seq.c -lm
 
-nbody-par-tau: nbody-par.c
-	/home/ppp1705/2018/tau-2.28/x86_64/bin/tau_cc.sh $(CFLAGS) -o nbody-par-tau nbody-par.c -g -lm
-
-all : clean nbody-par nbody-seq nbody-par-tau
+all : clean nbody-par nbody-seq 
 
 clean:
 	rm -f *.o nbody-seq nbody-par *~ *core
