@@ -413,7 +413,10 @@ void send_receive_initial_data(struct world *world, int process_id, int num_proc
 
     MPI_Bcast (world->bodies.mass, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast (world->bodies.radius, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+    MPI_Bcast(world->bodies.x1, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(world->bodies.y1, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(world->bodies.xv, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(world->bodies.yv, world_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
 }
 

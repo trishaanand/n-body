@@ -21,8 +21,8 @@
 
 struct bodyType
 {
-    double x1[MAXBODIES];     /* Old and new X-axis coordinates */
-    double y1[MAXBODIES];     /* Old and new Y-axis coordinates */
+    double x1[MAXBODIES];     /* X-axis coordinates */
+    double y1[MAXBODIES];     /* Y-axis coordinates */
     double xf[MAXBODIES];     /* force along X-axis */
     double yf[MAXBODIES];     /* force along Y-axis */
     double xv[MAXBODIES];     /* velocity along X-axis */
@@ -46,7 +46,6 @@ struct world
 */
 #define X(w, B) (w)->bodies.x1[B]
 #define Y(w, B) (w)->bodies.y1[B]
-#define YN(w, B) (w)->bodies.y_new[B]
 #define XF(w, B) (w)->bodies.xf[B]
 #define YF(w, B) (w)->bodies.yf[B]
 #define XV(w, B) (w)->bodies.xv[B]
@@ -66,7 +65,8 @@ clear_forces(struct world *world, int *particle_distribution, int total)
     }
 }
 
-static void compute_force_two_particles(struct world *world, int b, double x1, double y1, int c, double x2, double y2, double *xf, double *yf)
+static void compute_force_two_particles(struct world *world, int b, double x1, double y1, int c, double x2, 
+                                        double y2, double *xf, double *yf)
 {
     double dx = x2 - x1;
     double dy = y2 - y1;
@@ -82,11 +82,11 @@ static void compute_force_two_particles(struct world *world, int b, double x1, d
 
 static void
 compute_forces(struct world *world, int *particle_distribution, int total, int max_total_num, double *tmp_comm_array,
-               int tmp_array_size, int process_id, int num_processes)
+               double *receive_buffer, int tmp_array_size, int process_id, int num_processes, MPI_Request *request)
 {
-    MPI_Status status, status_arr[2];
-    MPI_Request request[2];
+    
     int i, j;
+    MPI_Status status_arr[2];
 
     //Pointers to point to the particle indexes, forces, and x,y coordinates in the tmp_comm_array
     double *index, *fx, *fy, *x, *y;
@@ -110,10 +110,7 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
         fy[i] = 0;
     }
     
-    double *receive_buffer = malloc(tmp_array_size * sizeof(double));
-    //Recv particles from left, send to the right
-    int neighbour_recv = (process_id - 1 + num_processes) % num_processes;
-    int neighbour_send = (process_id + 1) % num_processes;
+    
     int round = 0;
 
     int tmp_tot, own_particle_id, communicated_particle_id;
@@ -131,6 +128,7 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
             {
                 communicated_particle_id = (int)index[j];
                 if (own_particle_id < communicated_particle_id)
+                // if (own_particle_id > communicated_particle_id)
                 {
                     x2 = x[j];
                     y2 = y[j];
@@ -144,8 +142,9 @@ compute_forces(struct world *world, int *particle_distribution, int total, int m
                 }
             }
         }
-        MPI_Irecv(receive_buffer, tmp_array_size, MPI_DOUBLE, neighbour_recv, 0, MPI_COMM_WORLD, &request[1]);
-        MPI_Isend(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0, MPI_COMM_WORLD, &request[0]);
+        MPI_Startall(2, request);
+        // MPI_Irecv(receive_buffer, tmp_array_size, MPI_DOUBLE, neighbour_recv, 0, MPI_COMM_WORLD, &request[1]);
+        // MPI_Isend(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0, MPI_COMM_WORLD, &request[0]);
         MPI_Waitall(2, request, status_arr);
         // //Send receive tmp_comm_array from neighbours
         // MPI_Sendrecv_replace(tmp_comm_array, tmp_array_size, MPI_DOUBLE, neighbour_send, 0,
@@ -443,32 +442,30 @@ print(struct world *world)
     }
 }
 
+void prepare_MPI_commands(int process_id, int num_processes, int arr_size, double *tmp_comm_array, double *receive_buffer,
+                           MPI_Request *request) 
+{
+    //Recv particles from left, send to the right. Add the total number of processes so that the last 
+    //process wraps around to the zero'th process.
+    int neighbour_recv = (process_id - 1 + num_processes) % num_processes;
+    int neighbour_send = (process_id + 1) % num_processes;
+    
+    MPI_Recv_init(receive_buffer, arr_size, MPI_DOUBLE, neighbour_recv, 0, MPI_COMM_WORLD, &request[1]);
+    MPI_Send_init(tmp_comm_array, arr_size, MPI_DOUBLE, neighbour_send, 0, MPI_COMM_WORLD, &request[0]);
+
+}
+
 void do_compute(unsigned int secsup, struct filemap image_map, int steps, struct world *world, int process_id, 
-                int num_processes, int *count_per_process, int *particle_distribution, int max_total_num)
+                int num_processes, int *count_per_process, int *particle_distribution, int max_total_num, 
+                double *tmp_comm_array, double *receive_buffer, int arr_size, MPI_Request *request)
 {
     unsigned int lastup = 0;
-
-    /*
-    Communication array needs to store : 
-    1. number of particles, 
-    2. array of indexes, 
-    3. xforce 
-    4. yforce
-    5. x_loc 
-    6. y_loc
-    */
-    int arr_size = 1 + max_total_num * 5;
-    double *tmp_comm_array = malloc(arr_size * sizeof(double));
-    if (tmp_comm_array == NULL)
-    {
-        fprintf(stderr, "[%d]tmp_comm_array is NULL. Exiting \n", process_id);
-    }
-
+    
     while (steps--)
     {
         clear_forces(world, particle_distribution, count_per_process[process_id]);
         compute_forces(world, particle_distribution, count_per_process[process_id], max_total_num, 
-                       tmp_comm_array, arr_size, process_id, num_processes);
+                       tmp_comm_array, receive_buffer, arr_size, process_id, num_processes, request);
         compute_velocities(world, particle_distribution, count_per_process[process_id]);
         compute_positions(world, particle_distribution, count_per_process[process_id]);
 
@@ -642,6 +639,7 @@ int main(int argc, char **argv)
     bodies_per_process = (int)(world->bodyCt / num_processes);
     count_per_process = malloc(num_processes * sizeof(int));
 
+    /*Number of bodies to be distributed to each process*/
     for (i = 0; i < num_processes; i++)
     {
         if (i < world->bodyCt % num_processes)
@@ -677,30 +675,49 @@ int main(int argc, char **argv)
         max_total_num += 1;
     }
 
-
-    if (process_id == 0)
+    MPI_Request request[2];
+    /*
+    Communication array needs to store : 
+    1. number of particles, 
+    2. array of indexes, 
+    3. xforce 
+    4. yforce
+    5. x_loc 
+    6. y_loc
+    */
+    int arr_size = 1 + max_total_num * 5;
+    double *tmp_comm_array = malloc(arr_size * sizeof(double));
+    double *receive_buffer = malloc(arr_size * sizeof(double));
+    if ((tmp_comm_array == NULL) || (receive_buffer == NULL))
     {
-        if (gettimeofday(&start, 0) != 0)
-        {
-            fprintf(stderr, "could not do timing\n");
-            exit(1);
-        }
+        fprintf(stderr, "[%d]tmp_comm_array/receive_buffer malloc failed. Exiting \n", process_id);
+        exit(-1);
     }
+    prepare_MPI_commands(process_id, num_processes, arr_size, tmp_comm_array, receive_buffer, request);
 
+    if (gettimeofday(&start, 0) != 0)
+    {
+        fprintf(stderr, "could not do timing\n");
+        exit(1);
+    }
+    
     /* Main Execution */
-    do_compute(secsup, image_map, steps, world, process_id, num_processes, count_per_process, particle_distribution[process_id], max_total_num);
+    do_compute(secsup, image_map, steps, world, process_id, num_processes, count_per_process, particle_distribution[process_id], 
+                max_total_num, tmp_comm_array, receive_buffer, arr_size, request);
 
+    if (gettimeofday(&end, 0) != 0)
+    {
+        fprintf(stderr, "could not do timing\n");
+        exit(1);
+    }
+    rtime = (end.tv_sec + (end.tv_usec / 1000000.0)) -
+            (start.tv_sec + (start.tv_usec / 1000000.0));
+    
+    double global_rtime;
+    MPI_Reduce(&rtime, &global_rtime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if (process_id == 0)
     {
-        if (gettimeofday(&end, 0) != 0)
-        {
-            fprintf(stderr, "could not do timing\n");
-            exit(1);
-        }
-        rtime = (end.tv_sec + (end.tv_usec / 1000000.0)) -
-                (start.tv_sec + (start.tv_usec / 1000000.0));
-
-        fprintf(stderr, "N-body took %10.3f seconds\n", rtime);
+        fprintf(stderr, "N-body took %10.3f seconds\n", global_rtime);
     }
 
     send_receive_final_data(world, process_id, num_processes, count_per_process, particle_distribution); 
